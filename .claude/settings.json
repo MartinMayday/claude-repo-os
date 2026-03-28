@@ -1,18 +1,43 @@
 {
   "hooks": {
-    "preEdit": [
+    "PreToolUse": [
       {
-        "command": ".claude/hooks/pre-edit-guard.sh"
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/pre-edit-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/pre-edit-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/pre-command-guard.sh"
+          }
+        ]
       }
     ],
-    "preCommand": [
+    "PostToolUse": [
       {
-        "command": ".claude/hooks/pre-command-guard.sh"
-      }
-    ],
-    "postCommand": [
-      {
-        "command": ".claude/hooks/post-command-risk-log.sh"
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/post-command-risk-log.sh"
+          }
+        ]
       }
     ]
   }

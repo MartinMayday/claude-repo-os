@@ -41,8 +41,8 @@ Fill REPO_PROFILE.md first, then work through the items below.
 
 ## Step 6: Hooks
 - [ ] .claude/settings.json reviewed
-- [ ] pre-edit-guard.sh tested
-- [ ] pre-command-guard.sh tested
+- [ ] PreToolUse hook with Edit matcher tested
+- [ ] PreToolUse hook with Bash matcher tested
 - [ ] Blocked patterns match actual risk surfaces
 
 ## Step 7: Subagents

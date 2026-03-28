@@ -147,19 +147,20 @@ EOF
 cat > .claude/settings.json << 'EOF'
 {
   "hooks": {
-    "preEdit": [
+    "PreToolUse": [
       {
-        "command": ".claude/hooks/pre-edit-guard.sh"
+        "matcher": "Edit",
+        "hooks": [{ "type": "command", "command": ".claude/hooks/pre-edit-guard.sh" }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": ".claude/hooks/pre-command-guard.sh" }]
       }
     ],
-    "preCommand": [
+    "PostToolUse": [
       {
-        "command": ".claude/hooks/pre-command-guard.sh"
-      }
-    ],
-    "postCommand": [
-      {
-        "command": ".claude/hooks/post-command-risk-log.sh"
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": ".claude/hooks/post-command-risk-log.sh" }]
       }
     ]
   }
@@ -174,19 +175,32 @@ cat > .claude/hooks/pre-edit-guard.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-TARGET="${1:-}"
+# PreToolUse hook for Edit/Write — guard protected paths
+# Input: stdin JSON with { "tool_input": { "file_path": "..." } }
+# Exit 0 = allow, Exit 2 = block
+
+INPUT=$(cat)
+
+TARGET=""
+if command -v python3 &>/dev/null; then
+  TARGET=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))" 2>/dev/null) || true
+elif command -v jq &>/dev/null; then
+  TARGET=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null) || true
+fi
+
 [[ -z "$TARGET" ]] && exit 0
 
 case "$TARGET" in
   *.env|.env|.env.*|*"/secrets/"*|*"/credentials/"*|*.pem|*.key|*.p12|*.crt)
-    echo "BLOCKED: protected secret or credential path -> $TARGET"
+    echo "BLOCKED: protected secret or credential path -> $TARGET" >&2
     exit 2
     ;;
   *"/infra/"*|*"/terraform/"*|*"/pulumi/"*|*"/k8s/"*|*"/helm/"*|\
-*"/ansible/"*|*"/migrations/"*|*".github/workflows/"*|\
-*"package-lock.json"|*"pnpm-lock.yaml"|*"yarn.lock")
-    echo "APPROVAL REQUIRED: risky edit target -> $TARGET"
-    exit 3
+  *"/ansible/"*|*"/migrations/"*|*".github/workflows/"*|\
+  *"package-lock.json"|*"pnpm-lock.yaml"|*"yarn.lock")
+    # Approval-required operations mapped to block (hooks only support allow/block)
+    echo "BLOCKED: risky edit target requires manual approval -> $TARGET" >&2
+    exit 2
     ;;
   *)
     exit 0
@@ -198,7 +212,19 @@ cat > .claude/hooks/pre-command-guard.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-CMD="${1:-}"
+# PreToolUse hook for Bash — guard destructive commands
+# Input: stdin JSON with { "tool_input": { "command": "..." } }
+# Exit 0 = allow, Exit 2 = block
+
+INPUT=$(cat)
+
+CMD=""
+if command -v python3 &>/dev/null; then
+  CMD=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null) || true
+elif command -v jq &>/dev/null; then
+  CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) || true
+fi
+
 [[ -z "$CMD" ]] && exit 0
 
 blocked=(
@@ -223,15 +249,15 @@ approval_required=(
 
 for pattern in "${blocked[@]}"; do
   if [[ "$CMD" == *"$pattern"* ]]; then
-    echo "BLOCKED: destructive command -> $pattern"
+    echo "BLOCKED: destructive command -> $pattern" >&2
     exit 2
   fi
 done
 
 for pattern in "${approval_required[@]}"; do
   if [[ "$CMD" == *"$pattern"* ]]; then
-    echo "APPROVAL REQUIRED: guarded command -> $pattern"
-    exit 3
+    echo "BLOCKED: guarded command requires manual approval -> $pattern" >&2
+    exit 2
   fi
 done
 
@@ -242,9 +268,18 @@ cat > .claude/hooks/approval-check.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Approval check utility — reads stdin JSON
+# Input: stdin JSON with { "tool_input": { "file_path": "..." } }
+
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 APPROVALS_FILE="$PROJECT_ROOT/ops/risk/APPROVALS.md"
-TARGET="${1:-}"
+INPUT=$(cat)
+TARGET=""
+if command -v python3 &>/dev/null; then
+  TARGET=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('file_path',''))" 2>/dev/null) || true
+elif command -v jq &>/dev/null; then
+  TARGET=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""' 2>/dev/null) || true
+fi
 
 [[ -z "$TARGET" ]] && { echo "No target supplied"; exit 1; }
 [[ -f "$APPROVALS_FILE" ]] || { echo "No APPROVALS.md found"; exit 1; }
@@ -259,19 +294,34 @@ cat > .claude/hooks/post-command-risk-log.sh << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
+# PostToolUse hook for Bash — log risk-relevant commands
+# Input: stdin JSON with { "tool_input": { "command": "..." }, "tool_result": "..." }
+# Exit 0 = always (PostToolUse cannot block)
+
+INPUT=$(cat)
+
 PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 RISK_LOG="$PROJECT_ROOT/ops/risk/RISK_REGISTER.md"
-CMD="${1:-}"
-RESULT="${2:-unknown}"
+
+[[ -f "$RISK_LOG" ]] || exit 0
+
+CMD=""
+RESULT=""
+if command -v python3 &>/dev/null; then
+  CMD=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null) || true
+  RESULT=$(echo "$INPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d.get('tool_result',''); print(r[:200] if r else 'unknown')" 2>/dev/null) || true
+elif command -v jq &>/dev/null; then
+  CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) || true
+  RESULT=$(echo "$INPUT" | jq -r '.tool_result[:200] // "unknown"' 2>/dev/null) || true
+fi
 
 [[ -z "$CMD" ]] && exit 0
-[[ -f "$RISK_LOG" ]] || exit 0
 
 {
   echo ""
   echo "- Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo "  Action: $CMD"
-  echo "  Result: $RESULT"
+  echo "  Result: ${RESULT:-unknown}"
 } >> "$RISK_LOG"
 
 exit 0
