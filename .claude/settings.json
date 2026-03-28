@@ -1,0 +1,19 @@
+{
+  "hooks": {
+    "preEdit": [
+      {
+        "command": ".claude/hooks/pre-edit-guard.sh"
+      }
+    ],
+    "preCommand": [
+      {
+        "command": ".claude/hooks/pre-command-guard.sh"
+      }
+    ],
+    "postCommand": [
+      {
+        "command": ".claude/hooks/post-command-risk-log.sh"
+      }
+    ]
+  }
+}
